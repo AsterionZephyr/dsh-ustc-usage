@@ -1,0 +1,19 @@
+# dsh-ustc-usage 的挂载声明。
+#
+# DSH 通过 profile 的 `dsh.profile.bundles` 找到本包，读这个文件把它插进插件栈。
+# 等价于手工在 profile 的 cordis.patch.yml 里写同一段 insert ——
+# ⚠️ 两者**只能选一个**，同时用会双重挂载。
+#
+# 这里只声明一行；**网关地址与 Key 请写进 profile 的 patch 层**
+# （C:\Users\<you>\.dsh\profiles\<profile>\cordis.patch.yml），
+# 这样升级本插件不会覆盖你的配置：
+#
+#   - id: ustc-usage
+#     config:
+#       baseUrl: "https://api.llm.ustc.edu.cn/"
+#       apiKeyEnv: "USTC_API_KEY"     # 推荐：复用 DSH 凭据库里的同名字段
+#       # apiKey: "sk-..."            # 或者直接写死（会明文落在 profile 里）
+- insert:
+    - id: ustc-usage
+      name: dsh-ustc-usage
+      config: {}

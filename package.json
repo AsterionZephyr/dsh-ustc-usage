@@ -1,0 +1,63 @@
+{
+  "name": "dsh-ustc-usage",
+  "version": "1.0.0",
+  "description": "Show the USTC campus LLM gateway's remaining quota (3h/12h/24h rolling budgets, RPM/concurrency/TPM limits) inside DSH: a settings page plus a host service that reads the LiteLLM-compatible /key/info and /user/info endpoints.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "*",
+    "@deepseek-ai/schemastery": "*",
+    "react": "^18.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
+  },
+  "author": "AsterionZephyr",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "plugin",
+    "ustc",
+    "litellm",
+    "quota",
+    "budget"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AsterionZephyr/dsh-ustc-usage.git"
+  },
+  "homepage": "https://github.com/AsterionZephyr/dsh-ustc-usage#readme",
+  "bugs": {
+    "url": "https://github.com/AsterionZephyr/dsh-ustc-usage/issues"
+  }
+}
