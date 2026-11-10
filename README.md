@@ -37,8 +37,22 @@ git clone https://github.com/AsterionZephyr/dsh-ustc-usage.git
 ```
 
 - 进度条长度 = **剩余占比**，颜色随用量升高转黄（≥75%）、转红（≥90%）
+- 条尾若出现红色斜纹，表示这一段额度在它自己重置之前就会先作废
+  （被更短周期的档位卡住；悬停进度条可看金额明细）
 - Key 只显示前 6 位 + 末 4 位，界面上永远不出现明文
-- 数据 30 秒刷新一次；关掉菜单不占资源（宿主侧 30s 缓存）
+- 数据 30 秒刷新一次；关掉菜单不再请求（宿主侧 30s 缓存）
+
+### 交互细节（2026-11 优化）
+
+- **启动即预取一份**，点开账户菜单时数据通常已经在手，不经历「正在获取…」。
+- 点账户按钮的一瞬间会**逐帧**找菜单（正常 1~2 帧），菜单和用量行同帧出现，
+  不会出现「菜单先弹出来、内容隔 300ms 才出现」的空白。
+- 数据过期时是 **stale-while-revalidate**：先照旧数据画，后台刷新，只把最后一行
+  改成「更新于 22:14 · 刷新中…」；刷新失败则显示「暂时无法更新 · 数据停在 22:14」。
+- 首次真的没数据时才显示骨架，骨架用**上一份数据的实测高度**撑住，
+  所以数据落地时菜单不会跳一下。
+- 数据没变时**完全不写 DOM**（按签名脏检查）；进度条宽度变化有 0.45s 过渡，
+  刷新按钮的 hover/focus 也不会再被每 400ms 清除一次。
 
 ## 原理
 
@@ -58,6 +72,27 @@ git clone https://github.com/AsterionZephyr/dsh-ustc-usage.git
 - 宿主路由**只允许 loopback** 访问（并校验 `sec-fetch-site` 与 Origin），非本机请求一律 403
 - Key 不出宿主进程：浏览器只拿到解析后的窗口与限额，永远拿不到凭据
 - 取数层 30s 缓存 + 5s 失败退避 + 15s 超时，网关抖动不会把界面打崩
+## 自测（无需真实网关）
+
+改客户端渲染逻辑时用 `test/harness.html`：它是一个**假宿主**页面（假 React + 假 slots +
+假账户菜单 + 可控延迟的 fetch），在真实浏览器里跑 `lib/client.js` 的注入与渲染逻辑，
+并把测量结果写进页面左上角。
+
+```bash
+python -m http.server 8765 --bind 127.0.0.1   # 在仓库根目录
+# 浏览器打开 http://127.0.0.1:8765/test/harness.html?latency=1500
+#   latency=0   数据先到（验证「有缓存时首帧就是数据」）
+#   latency=8000 慢网（验证骨架与高度一致）
+#   fail=1      网关 502（验证错误态）
+```
+
+输出字段：`firstInsertDelayMs`（点击→行出现）、`skeletonHeight`/`dataHeight`
+（两者应相等）、`quietMutations`（数据静止 1.2s 内 row 子树的 DOM 变更数，应为 0）、
+`reopenInsertDelayMs`/`reopenHasSkeleton`（关掉再开）、`refreshKeepsData`（手动刷新不清空旧数据）。
+
+2026-11 实测（latency=1500）：优化前 `firstInsertDelayMs=312`、`skeletonHeight=54` vs
+`dataHeight=195`、`quietMutations=54`；优化后 `10`、`195` vs `195`、`0`。
+
 ## 配置
 
 网关地址与 Key **不写在本插件里**，放在 profile 层，升级插件不会覆盖：
@@ -216,6 +251,7 @@ parent.insertBefore(row, first);
 | `lib/upstream.js` | 纯函数：解析 LiteLLM 载荷、合并窗口、挑 binding window |
 | `lib/client.js` | 客户端：账户弹窗 DOM 注入（已移除 `settings.section` 区块）|
 | `cordis.patch.yml` | 本插件自带的 insert 层 |
+| `test/harness.html` | 假宿主自测页（假 React/slots/菜单 + 可控延迟 fetch），用于量首帧延迟与 DOM 变更 |
 | `.verify/` | 反编译出的官方包（asar 解包），仅作参考，可删 |
 
 > 宿主面**不依赖** `@deepseek-ai/dsh-typert-protocol`——官方 desktop profile 的

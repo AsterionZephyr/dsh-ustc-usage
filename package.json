@@ -1,6 +1,6 @@
 {
   "name": "dsh-ustc-usage",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Show the USTC campus LLM gateway's remaining quota (3h/12h/24h rolling budgets, RPM/concurrency/TPM limits) inside DSH: a settings page plus a host service that reads the LiteLLM-compatible /key/info and /user/info endpoints.",
   "type": "module",
   "main": "lib/index.js",

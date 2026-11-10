@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>dsh-ustc-usage harness</title>
+<style>
+  html,body{height:100%;margin:0;background:#0f1117;color:#e8e8ea;font:14px/1.5 -apple-system,"Segoe UI",system-ui,sans-serif}
+  #stage{position:fixed;left:48px;bottom:48px}
+  #out{position:fixed;left:48px;top:24px;white-space:pre-wrap;font:12px/1.5 ui-monospace,Consolas,monospace;color:#9ee493}
+  .AM_root{position:relative;display:inline-block}
+  .AM_anchor{display:flex;align-items:center;gap:8px;padding:6px;border:0;border-radius:8px;background:#20242e;color:#e8e8ea}
+  .avatar{width:24px;height:24px;border-radius:50%;background:#4d6bfe;display:block}
+  .AM_surface{position:absolute;left:0;bottom:48px;min-width:240px;padding:6px;border:1px solid #2c313d;border-radius:10px;background:#171b24;box-shadow:0 12px 32px rgba(0,0,0,.45)}
+  .viewport{display:flex;flex-direction:column}
+  .items{display:flex;flex-direction:column}
+  .itemWrap{display:flex;align-items:center;gap:10px;width:100%;padding:8px 10px;border:0;border-radius:6px;background:transparent;color:#e8e8ea;text-align:left}
+  .itemIcon{width:14px;height:14px;border-radius:3px;background:#5a6172;display:block}
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<pre id="out">booting…</pre>
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const LATENCY = Number(params.get("latency") ?? 1200);
+  const FAIL = params.get("fail") === "1";
+  const FAIL_AFTER = params.get("failAfter") === "1";
+  const WINDOWS = Number(params.get("windows") ?? 3);
+  const events = [];
+  const mark = (name, extra) => events.push({ name, t: performance.now(), extra });
+
+  // ── 假 React：本插件只用 createElement 渲染官方组件（无 Hook）──────────
+  function createElement(type, props, ...children) {
+    if (typeof type === "function") return type(props || {});
+    const el = document.createElement(type);
+    for (const [k, v] of Object.entries(props || {})) {
+      if (v === null || v === undefined) continue;
+      if (k === "className") el.className = v;
+      else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+      else if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2).toLowerCase(), v);
+      else el.setAttribute(k, String(v));
+    }
+    for (const child of children.flat()) {
+      if (child === null || child === undefined || child === false) continue;
+      el.appendChild(typeof child === "object" ? child : document.createTextNode(String(child)));
+    }
+    return el;
+  }
+  const fakeReact = { createElement, version: "18.3.1" };
+
+  const modules = {};
+  window.__ModuleLoader__ = {
+    load({ id, factory }) {
+      const require = (name) => {
+        if (name === "react") return fakeReact;
+        throw new Error("module not available in harness: " + name);
+      };
+      modules[id] = factory(require);
+    },
+  };
+
+  // ── 假网关数据 ─────────────────────────────────────────────────────────
+  const iso = (ms) => new Date(ms).toISOString();
+  function fixture() {
+    return {
+      ready: true, state: "ok", error: null,
+      fetchedAt: iso(Date.now()),
+      alias: "sk-abcdefghijklmnopqrstuvwx",
+      blocked: false,
+      windows: [
+        { duration: "3h", limit: 30, windowSpend: 2.77, usedKnown: true, remaining: 27.23, usedPercent: 9.23, resetAt: iso(Date.now() + 95 * 60000), scope: "key" },
+        { duration: "12h", limit: 70, windowSpend: 11.08, usedKnown: true, remaining: 58.92, usedPercent: 15.83, resetAt: iso(Date.now() + 275 * 60000), scope: "key" },
+        { duration: "24h", limit: 100, windowSpend: 65.74, usedKnown: true, remaining: 34.26, usedPercent: 65.74, resetAt: iso(Date.now() + 275 * 60000), scope: "key" },
+      ].slice(0, WINDOWS),
+      limits: {
+        rpm: { known: true, unlimited: false, value: 20 },
+        parallel: { known: true, unlimited: false, value: 20 },
+        tpm: { known: false, unlimited: true, value: null },
+      },
+    };
+  }
+
+  let fetchCount = 0;
+  window.fetch = () => {
+    fetchCount += 1;
+    const n = fetchCount;
+    mark("fetch:start", n);
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        mark("fetch:end", n);
+        if (FAIL || (FAIL_AFTER && n > 1)) {
+          resolve({ ok: false, status: 502, json: async () => ({ ok: false }) });
+          return;
+        }
+        const value = fixture();
+        resolve({ ok: true, status: 200, json: async () => ({ ok: true, value }) });
+      }, LATENCY);
+    });
+  };
+
+  // ── 假宿主：slots + 官方 AccountLauncher（菜单项在嵌套 items 分组里）──
+  const slotEntries = [];
+  let registered = null;
+  const ctx = {
+    slots: {
+      entries: (name) => (name === "settings.launcher" ? slotEntries : []),
+      inject: (name, fn) => { fn(ctx); },
+      register: (options, component) => { registered = { options, component }; return { dispose() {} }; },
+    },
+    logger: { warn() {}, info() {}, debug() {} },
+  };
+
+  let menuOpen = false;
+  function officialMenu() {
+    const menu = document.createElement("div");
+    menu.setAttribute("role", "menu");
+    menu.className = "AM_surface";
+    const viewport = document.createElement("div");
+    viewport.setAttribute("role", "presentation");
+    viewport.className = "viewport";
+    const items = document.createElement("div");
+    items.className = "items";
+    for (const [label, shortcut] of [["设置", "Ctrl+,"], ["意见反馈", ""], ["退出登录", ""]]) {
+      const btn = document.createElement("button");
+      btn.setAttribute("role", "menuitem");
+      btn.className = "itemWrap";
+      const icon = document.createElement("span");
+      icon.className = "itemIcon";
+      btn.appendChild(icon);
+      const text = document.createElement("span");
+      text.textContent = label;
+      btn.appendChild(text);
+      if (shortcut !== "") btn.setAttribute("aria-keyshortcuts", shortcut);
+      items.appendChild(btn);
+    }
+    viewport.appendChild(items);
+    menu.appendChild(viewport);
+    return menu;
+  }
+
+  function OfficialLauncher() {
+    const root = document.createElement("span");
+    root.className = "AM_root";
+    const trigger = document.createElement("button");
+    trigger.className = "AM_anchor";
+    trigger.setAttribute("aria-haspopup", "menu");
+    trigger.setAttribute("aria-label", "menu");
+    trigger.setAttribute("aria-expanded", "false");
+    const avatar = document.createElement("span");
+    avatar.className = "avatar";
+    trigger.appendChild(avatar);
+    trigger.addEventListener("click", () => {
+      if (menuOpen) {
+        menuOpen = false;
+        trigger.setAttribute("aria-expanded", "false");
+        const portal = document.querySelector(".AM_surface");
+        if (portal !== null) portal.remove();
+        return;
+      }
+      menuOpen = true;
+      trigger.setAttribute("aria-expanded", "true");
+      document.body.appendChild(officialMenu());
+      mark("menu:opened");
+    });
+    root.appendChild(trigger);
+    return root;
+  }
+  slotEntries.push({ options: { priority: 0 }, component: OfficialLauncher });
+  slotEntries.push({ options: { priority: -1 }, component: function Other() { return document.createElement("span"); } });
+
+  // ── 观察器：只记录时间戳，不写 DOM ─────────────────────────────────────
+  let rowPresent = false;
+  const insertTimes = [];
+  const bodyObserver = new MutationObserver(() => {
+    const row = document.querySelector("[data-dsh-ustc-usage]");
+    if (row !== null && !rowPresent) {
+      rowPresent = true;
+      insertTimes.push(performance.now());
+    } else if (row === null && rowPresent) {
+      rowPresent = false;
+    }
+  });
+
+  // ── 载入插件并渲染官方 launcher 包装组件 ──────────────────────────────
+  window.addEventListener("load", () => {
+    const script = document.createElement("script");
+    script.src = "../lib/client.js?v=" + Date.now();
+    script.onload = () => {
+      mark("client:loaded");
+      const mod = modules["dsh-ustc-usage"];
+      if (!mod || typeof mod.apply !== "function") { finish("client module missing apply"); return; }
+      mod.apply(ctx);
+      mark("client:applied");
+      const launcher = registered && registered.component;
+      if (typeof launcher !== "function") { finish("launcher not registered"); return; }
+      document.getElementById("stage").appendChild(launcher({}));
+      bodyObserver.observe(document.body, { childList: true, subtree: true });
+      runScenario();
+    };
+    script.onerror = () => finish("client.js failed to load");
+    document.body.appendChild(script);
+  });
+
+  // ── 场景：轮询式测量（不依赖固定时刻）────────────────────────────────
+  const results = {};
+  const row = () => document.querySelector("[data-dsh-ustc-usage]");
+  const rowText = () => { const r = row(); return r === null ? null : r.textContent.replace(/\s+/g, " ").trim(); };
+  const rowHeight = () => { const r = row(); return r === null ? null : Math.round(r.getBoundingClientRect().height * 10) / 10; };
+  const clickTrigger = () => document.querySelector('[aria-haspopup="menu"]').click();
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  async function waitFor(predicate, timeoutMs, label) {
+    const started = performance.now();
+    while (performance.now() - started < timeoutMs) {
+      if (predicate()) return performance.now() - started;
+      await sleep(8);
+    }
+    mark("timeout", label);
+    return null;
+  }
+
+  async function runScenario() {
+    await sleep(500);
+    mark("click#1");
+    clickTrigger();
+    const d1 = await waitFor(() => row() !== null, 3000, "row#1");
+    results.firstInsertDelayMs = d1 === null ? null : Math.round(d1);
+    results.skeletonVisible = /正在获取|Loading/.test(rowText() || "");
+    await sleep(48);
+    results.skeletonHeight = rowHeight();
+    results.skeletonText = rowText();
+
+    const dataDelay = await waitFor(() => /\u00a5/.test(rowText() || ""), 8000, "data");
+    results.dataDelayMs = dataDelay === null ? null : Math.round(performance.now() - clickTimeMark("click#1"));
+    await sleep(220);
+    results.dataText = rowText();
+    results.dataHeight = rowHeight();
+    results.windowCount = row() === null ? 0 : row().querySelectorAll(".dshuu-menuWin").length;
+
+    // 静止窗口：数据不再变化时，row 子树不应再有任何 DOM 变更
+    const quietRow = row();
+    if (quietRow !== null) {
+      quietRow.__quiet = 0;
+      new MutationObserver((list) => { quietRow.__quiet += list.length; })
+        .observe(quietRow, { childList: true, subtree: true, attributes: true, characterData: true });
+    }
+    await sleep(1200);
+    results.quietMutations = quietRow === null ? null : quietRow.__quiet;
+
+    // 手动刷新：旧数据必须留在屏幕上（不能闪骨架），状态行显示「刷新中…」
+    const refreshButton = row() === null ? null : row().querySelector(".dshuu-menuRowRefresh");
+    if (refreshButton !== null) {
+      mark("refresh:click");
+      refreshButton.click();
+      await sleep(80);
+      results.refreshKeepsData = /¥/.test(rowText() || "");
+      results.refreshShowsBusy = /刷新中|Refreshing/.test(rowText() || "");
+      results.refreshButtonDisabled = refreshButton.disabled === true;
+      await sleep(700);
+      results.afterFailKeepsData = /¥/.test(rowText() || "");
+      results.afterFailShowsHint = /暂时无法更新|Could not refresh/.test(rowText() || "");
+      const fetchedLine = row() === null ? null : row().querySelector(".dshuu-fetched");
+      results.afterFailTitle = fetchedLine === null ? null : fetchedLine.title;
+    }
+
+    // 关掉再开：数据已缓存，第一帧就应是数据
+    clickTrigger();
+    await sleep(200);
+    results.closedRowGone = row() === null;
+    mark("click#2");
+    const t2 = performance.now();
+    clickTrigger();
+    const d2 = await waitFor(() => row() !== null, 3000, "row#2");
+    results.reopenInsertDelayMs = d2 === null ? null : Math.round(d2);
+    results.reopenText = rowText();
+    results.reopenHasSkeleton = /正在获取|Loading/.test(results.reopenText || "");
+    await sleep(150);
+    results.reopenTextAfter150 = rowText();
+    finish(null);
+  }
+
+  function clickTimeMark(name) {
+    for (let i = events.length - 1; i >= 0; i -= 1) {
+      if (events[i].name === name) return events[i].t;
+    }
+    return performance.now();
+  }
+
+  function finish(fatal) {
+    bodyObserver.disconnect();
+    const summary = Object.assign({ fatal, latencyMs: LATENCY, fetchCount, events }, results);
+    document.title = "harness done";
+    document.getElementById("out").textContent = "RESULTS\n" + JSON.stringify(summary, null, 1);
+    window.__HARNESS__ = summary;
+  }
+})();
+</script>
+</body>
+</html>
